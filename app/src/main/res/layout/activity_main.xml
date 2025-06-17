@@ -1,21 +1,34 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:orientation="vertical" android:layout_width="match_parent"
+<androidx.constraintlayout.widget.ConstraintLayout 
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/constraintLayout"
+    android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:gravity="center"
-    android:padding="16dp">
+    tools:context=".MainActivity">
 
+    <!-- Vue pour afficher l'aperçu de la caméra -->
+    <androidx.camera.view.PreviewView
+        android:id="@+id/previewView"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:layout_margin="16dp"
+        android:scaleType="fitCenter"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toTopOf="@+id/btnRecord"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <!-- Bouton pour lancer ou arrêter l’enregistrement -->
     <Button
-        android:id="@+id/btnPhoto"
+        android:id="@+id/btnRecord"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Prendre une photo" />
-
-    <Button
-        android:id="@+id/btnVideo"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="Enregistrer une vidéo"
-        android:layout_marginTop="20dp" />
-
-</LinearLayout>
+        android:text="Démarrer l’enregistrement"
+        app:layout_constraintTop_toBottomOf="@id/previewView"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        android:layout_margin="24dp"/>
+</androidx.constraintlayout.widget.ConstraintLayout>

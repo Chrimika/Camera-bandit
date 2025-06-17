@@ -9,6 +9,11 @@
         android:maxSdkVersion="28" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.CAMERA"/>
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION"/>
 
     <application
         android:allowBackup="true"
@@ -20,6 +25,13 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.CameraBandit"
         tools:targetApi="31">
+
+        <service android:name=".VideoRecordService"
+            tools:ignore="ForegroundServicePermission,WrongManifestParent"
+            android:foregroundServiceType="mediaProjection|camera|microphone"
+            android:exported="false"
+            />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"

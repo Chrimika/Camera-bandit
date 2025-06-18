@@ -1,18 +1,19 @@
 package com.example.camerabandit
 
-import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.app.Service
+import android.app.PendingIntent
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.provider.MediaStore
+import android.util.Log
 import androidx.annotation.RequiresPermission
 import androidx.camera.core.CameraSelector
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -20,35 +21,66 @@ import androidx.camera.video.*
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleService
+import java.text.SimpleDateFormat
+import java.util.Locale
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+
 
 class VideoRecordService : LifecycleService() {
-
-    companion object {
-        const val CHANNEL_ID = "VideoRecordServiceChannel"
-        const val NOTIF_ID = 1
-        const val ACTION_START = "ACTION_START_RECORDING"
-        const val ACTION_STOP = "ACTION_STOP_RECORDING"
-    }
-
     private var videoCapture: VideoCapture<Recorder>? = null
     private var recording: Recording? = null
-    private var powerManagerWakeLock: PowerManager.WakeLock? = null
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var cameraExecutor: ExecutorService = Executors.newSingleThreadExecutor()
+
+    companion object {
+        const val CHANNEL_ID = "VideoRecordChannel"
+        const val NOTIFICATION_ID = 101
+        const val ACTION_START = "ACTION_START"
+        const val ACTION_STOP = "ACTION_STOP"
+        private val REQUIRED_PERMISSIONS: Array<String> = arrayOf(
+            android.Manifest.permission.CAMERA,
+            android.Manifest.permission.RECORD_AUDIO
+        )
+    }
 
     override fun onCreate() {
         super.onCreate()
+        cameraExecutor = Executors.newSingleThreadExecutor() as ExecutorService
         createNotificationChannel()
         acquireWakeLock()
-        startCamera()
     }
 
-    @RequiresPermission(allOf = [Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO])
+    @SuppressLint("MissingSuperCall")
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        super.onStartCommand(intent, flags, startId)
-        when (intent?.action) {
-            ACTION_START -> startRecording()
-            ACTION_STOP -> stopRecording()
+        intent?.action?.let { action ->
+            when (action) {
+                ACTION_START -> {
+                    if (hasRequiredPermissions()) {
+                        startForeground(NOTIFICATION_ID, createNotification())
+                        startRecording()
+                    } else {
+                        Log.e("VideoRecordService", "Permissions manquantes")
+                        stopSelf()
+                    }
+                }
+                ACTION_STOP -> {
+                    stopRecording()
+                    stopForeground(true)
+                    stopSelf()
+                }
+            }
         }
         return START_STICKY
+    }
+
+    private fun hasRequiredPermissions(): Boolean {
+        return REQUIRED_PERMISSIONS.all { permission ->
+            ContextCompat.checkSelfPermission(
+                this,
+                permission
+            ) == PackageManager.PERMISSION_GRANTED
+        }
     }
 
     private fun createNotificationChannel() {
@@ -57,107 +89,121 @@ class VideoRecordService : LifecycleService() {
                 CHANNEL_ID,
                 "Enregistrement vidéo",
                 NotificationManager.IMPORTANCE_LOW
-            )
+            ).apply {
+                description = "Enregistrement vidéo en cours"
+            }
+
             val manager = getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(channel)
         }
     }
 
     private fun createNotification(): Notification {
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Enregistrement en cours")
-            .setContentText("La vidéo est enregistrée en arrière-plan")
-            .setSmallIcon(android.R.drawable.ic_menu_camera)
+            .setContentText("L'application enregistre une vidéo")
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentIntent(pendingIntent)
             .setOngoing(true)
             .build()
     }
 
     private fun acquireWakeLock() {
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
-        powerManagerWakeLock = powerManager.newWakeLock(
+        wakeLock = powerManager.newWakeLock(
             PowerManager.PARTIAL_WAKE_LOCK,
-            "CameraBandit::VideoRecordWakeLock"
+            "CameraBandit::VideoWakeLock"
         ).apply {
-            acquire()
+            acquire(10 * 60 * 1000L /*10 minutes*/)
         }
     }
 
-    private fun startCamera() {
+    private fun startRecording() {
+        if (recording != null || !hasRequiredPermissions()) return
+
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
         cameraProviderFuture.addListener({
-            val cameraProvider = cameraProviderFuture.get()
-
-            val recorder = Recorder.Builder()
-                .setQualitySelector(QualitySelector.from(Quality.HIGHEST))
-                .build()
-            videoCapture = VideoCapture.withOutput(recorder)
-
             try {
+                val cameraProvider = cameraProviderFuture.get()
+
+                val recorder = Recorder.Builder()
+                    .setQualitySelector(QualitySelector.from(Quality.HIGHEST))
+                    .build()
+                videoCapture = VideoCapture.withOutput(recorder)
+
+                // Ne pas afficher la preview dans le service
                 cameraProvider.unbindAll()
-                // Ici this est LifecycleOwner (car LifecycleService)
                 cameraProvider.bindToLifecycle(
                     this,
                     CameraSelector.DEFAULT_BACK_CAMERA,
                     videoCapture
                 )
+
+                val name = SimpleDateFormat("yyyy-MM-dd-HH-mm-ss-SSS", Locale.getDefault())
+                    .format(System.currentTimeMillis())
+                val contentValues = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, "$name.mp4")
+                    put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4")
+                    if (Build.VERSION.SDK_INT > Build.VERSION_CODES.P) {
+                        put(MediaStore.Video.Media.RELATIVE_PATH, "DCIM/CameraBandit")
+                    }
+                }
+
+                val outputOptions = MediaStoreOutputOptions.Builder(
+                    contentResolver,
+                    MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                ).setContentValues(contentValues).build()
+
+                recording = videoCapture?.output
+                    ?.prepareRecording(this, outputOptions)
+                    ?.withAudioEnabled()
+                    ?.start(ContextCompat.getMainExecutor(this)) { event ->
+                        when (event) {
+                            is VideoRecordEvent.Start -> {
+                                Log.d("VideoRecordService", "Enregistrement démarré")
+                            }
+                            is VideoRecordEvent.Finalize -> {
+                                if (!event.hasError()) {
+                                    Log.d("VideoRecordService", "Enregistrement terminé: ${event.outputResults.outputUri}")
+                                } else {
+                                    Log.e("VideoRecordService", "Erreur enregistrement: ${event.error}")
+                                }
+                                recording = null
+                            }
+                        }
+                    }
             } catch (e: Exception) {
-                e.printStackTrace()
+                Log.e("VideoRecordService", "Erreur démarrage enregistrement", e)
+                stopSelf()
             }
         }, ContextCompat.getMainExecutor(this))
     }
 
-    @SuppressLint("ForegroundServiceType")
-    @RequiresPermission(allOf = [Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO])
-    private fun startRecording() {
-        val name = "video_${System.currentTimeMillis()}.mp4"
-        val contentValues = ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, name)
-            put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4")
-            put(MediaStore.MediaColumns.RELATIVE_PATH, "DCIM/CameraBandit")
-        }
-
-        val mediaStoreOutput = MediaStoreOutputOptions.Builder(
-            contentResolver,
-            MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-        ).setContentValues(contentValues).build()
-
-        // démarre le service en premier plan (notification obligatoire pour éviter l'arrêt)
-        startForeground(NOTIF_ID, createNotification())
-
-        recording = videoCapture?.output
-            ?.prepareRecording(this, mediaStoreOutput)
-            ?.withAudioEnabled()
-            ?.start(ContextCompat.getMainExecutor(this)) { event ->
-                when (event) {
-                    is VideoRecordEvent.Start -> {
-                        // Enregistrement démarré, tu peux informer l'UI si besoin
-                    }
-                    is VideoRecordEvent.Finalize -> {
-                        if (event.hasError()) {
-                            // Gérer l’erreur ici
-                            stopForeground(true)
-                            stopSelf()
-                        } else {
-                            // Vidéo sauvegardée avec succès
-                            stopForeground(true)
-                            stopSelf()
-                        }
-                    }
-                }
-            }
-    }
-
     private fun stopRecording() {
-        recording?.stop()
+        try {
+            recording?.stop()
+        } catch (e: Exception) {
+            Log.e("VideoRecordService", "Erreur arrêt enregistrement", e)
+        }
         recording = null
-        stopForeground(true)
-        stopSelf()
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        powerManagerWakeLock?.let {
+        stopRecording()
+        wakeLock?.let {
             if (it.isHeld) it.release()
         }
+        cameraExecutor.shutdown()
     }
+
+    @SuppressLint("MissingSuperCall")
+    override fun onBind(intent: Intent): IBinder? = null
 }
